@@ -1,0 +1,182 @@
+/* ============================================================
+   通用表单控件（去 MUI 化）+ 提示条 Alert + 模型目录弹窗辅助
+   —— 复用 tokens.css 的功能色 / 圆角 / 字体令牌；
+      仅承载 ParamControls / ModelDirDialog 等使用；不引入新依赖。
+   ============================================================ */
+
+/* —— Alert 提示条（error / warning / info） —— */
+.alert {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border-radius: var(--radius-ctrl);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-body);
+}
+.alert .a-ico {
+  flex: none;
+  line-height: 1.5;
+}
+.alert-error {
+  background: var(--color-error-surface);
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+.alert-warning {
+  background: var(--color-warning-surface);
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+.alert-info {
+  background: var(--color-info-surface);
+  border-color: var(--color-info);
+  color: var(--color-info);
+}
+
+/* —— 参数行（ParamControls） —— */
+.param {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.param-label {
+  font-size: 13px;
+  color: var(--text-body);
+  font-weight: 600;
+}
+.param-label .p-desc {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.param-num {
+  flex: none;
+  width: 90px;
+}
+.param-num input {
+  text-align: right;
+}
+.param-switch {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.switch-label {
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+/* —— 开关 Switch（复选框样式化，替代 MUI Switch） —— */
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch .track {
+  width: 38px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background 0.18s ease;
+  flex: none;
+  position: relative;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.switch input:checked + .track {
+  background: var(--brand);
+}
+.switch input:checked + .track::after {
+  transform: translateX(16px);
+}
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* —— 语速图例 Chip（替代 MUI Chip） —— */
+.legend {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+}
+.legend-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* —— 模型目录弹窗辅助（复用 .modal-mask / .modal 结构） —— */
+.md-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.md-dir {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-body);
+}
+.md-dir strong {
+  color: var(--text-strong);
+}
+.md-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+.md-pick {
+  text-align: center;
+}
+.md-hf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.md-hf:hover {
+  text-decoration: underline;
+}
+.md-ext {
+  font-size: 12px;
+}

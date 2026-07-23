@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment (contains sensitive or local-only settings)
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# === 模型文件 — 不随代码分发 ===
+# 用户需自行从 HuggingFace 下载 VoiceDesign 模型集
+# See: Models/DOWNLOAD_GUIDE.md
+Models/
+
+# Python cache
+__pycache__/
+*.pyc
+.workbuddy/
+
+# Audio / numpy artifacts (local only, not in repo)
+*.wav
+*.npy
+
+# Dev servers — CPages static hosting only, no local servers in repo
+server.cjs
+server.mjs
+
+# Auto-generated type declarations
+vite.config.d.ts
+
+# Project documentation assets (local only, not in GitHub repo)
+docs/
+deliverables/
+
+# Project planning / old session artifacts
+overview.md
+离线前端配音系统开发实施计划.md
+
+# Test files — local only, not needed for CPages build
+vitest.config.ts
+src/__tests__/
+
+# Temp / probe files
+.tmp_probe/

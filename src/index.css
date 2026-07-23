@@ -1,0 +1,5 @@
+/* 全局样式入口：引入设计令牌（tokens.css）、全局基础样式（global.css）与调音台组件样式（tuning.css）。 */
+@import "./styles/tokens.css";
+@import "./styles/global.css";
+@import "./styles/tuning.css";
+@import "./styles/dubbing.css";

@@ -1,0 +1,103 @@
+/* ============================================================
+   设计令牌（唯一来源：AudioTS 交互与配色设计规范 + AudioTS-SPA设计令牌.md）
+   —— 全部采用「color-/text-/border/panel-/tab-/radius-/space-/shadow-」命名，无旧命名残留
+   —— 1:1 搬运自原型 <style>，禁止新增全局 --* 除非布局级（§5.1）。
+   ============================================================ */
+:root{
+  /* 主色阶 Primary（warm terracotta） */
+  --color-primary-50:#FBEFE9; --color-primary-100:#F6DCD0; --color-primary-200:#ECC0AC;
+  --color-primary-300:#E29F82; --color-primary-400:#D67C57; --color-primary-500:#C75E3A;
+  --color-primary-600:#B14D2D; --color-primary-700:#933C22; --color-primary-800:#75301C; --color-primary-900:#5E2716;
+  /* 辅助色阶 Secondary（sage teal） */
+  --color-secondary-50:#EAF3F1; --color-secondary-100:#CFE6E1; --color-secondary-500:#3F8A7C;
+  --color-secondary-600:#2F7265; --color-secondary-700:#265C53;
+  /* 中性色阶 Neutral（warm gray） */
+  --color-neutral-0:#FFFFFF; --color-neutral-50:#FAF7F4; --color-neutral-100:#F3EEE9;
+  --color-neutral-200:#E6DCD4; --color-neutral-300:#D2C5BA; --color-neutral-400:#B3A69A;
+  --color-neutral-500:#8C8074; --color-neutral-600:#6E6358; --color-neutral-700:#524A41;
+  --color-neutral-800:#3A342D; --color-neutral-900:#262119;
+  /* 功能色 Functional */
+  --color-success:#1F7A48; --color-success-surface:#E7F3EC;
+  --color-warning:#9A6208; --color-warning-surface:#FBE6C2;
+  --color-error:#B3261E; --color-error-surface:#FBE7E5;
+  --color-info:#1F6FB2; --color-info-surface:#E6F0F8;
+  --color-focus-ring:#B14D2D;
+
+  /* 语义别名（浅色） */
+  --bg-app:var(--color-neutral-50); --bg-surface:var(--color-neutral-0); --bg-raised:var(--color-neutral-0);
+  --bg-subtle:var(--color-neutral-100); --text-strong:var(--color-neutral-800); --text-body:var(--color-neutral-700);
+  --text-soft:var(--color-neutral-600); --text-muted:var(--color-neutral-400);
+  --border:var(--color-neutral-200); --border-strong:var(--color-neutral-300);
+  --brand:var(--color-primary-600); --brand-soft:var(--color-primary-50); --brand-contrast:#FFFFFF;
+  --accent:var(--color-secondary-600);
+
+  /* 圆角 / 间距 / 阴影（克制，仅浮层用） */
+  --radius-ctrl:8px; --radius-card:12px; --radius-pill:999px;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px; --space-8:32px; --space-12:48px;
+  --shadow-overlay:0 8px 24px rgba(38,33,25,0.12);
+  --shadow-toast:0 6px 16px rgba(38,33,25,0.16);
+  --shadow-modal:0 12px 40px rgba(38,33,25,0.30);
+  --font-sans-cn:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+
+  /* —— SPA 新增：共享框架布局 Token（§2） —— */
+  --content-max-width:1200px;
+  --content-read-width:720px;
+  --content-pad-x:16px;
+  --content-gap-y:24px;
+  --panel-surface:var(--color-neutral-0);
+  --panel-border:1px solid var(--color-neutral-200);
+  --panel-radius:var(--radius-card);
+  --panel-pad:16px;
+  --panel-sub-surface:var(--color-neutral-100);
+  --panel-gap:16px;
+
+  /* —— SPA 新增：顶栏 Token（§0.3） —— */
+  --topbar-surface:var(--color-neutral-0);
+  --topbar-h:64px;
+  --topbar-border:1px solid var(--color-neutral-200);
+  --brand-mark-bg:linear-gradient(135deg,var(--color-primary-400),var(--color-primary-600));
+  --brand-mark-fg:#FFFFFF;
+  --brand-mark-radius:10px;
+  --brand-name:var(--color-neutral-800);
+  --user-chip:var(--color-neutral-100);
+  --user-chip-fg:var(--color-neutral-700);
+
+  /* —— SPA 新增：选项卡组件 Token（§1，四态） —— */
+  --tabbar-surface:var(--color-neutral-50);
+  --tabbar-border:1px solid var(--color-neutral-200);
+  --tabbar-pad-x:24px;
+  --tab-item-h:44px;
+  --tab-gap:4px;
+  --tab-text-size:15px;
+  --tab-indicator-h:2px;
+  --tab-text-default:var(--color-neutral-700);
+  --tab-icon-default:var(--color-neutral-500);
+  --tab-fg-active:var(--color-primary-600);
+  --tab-bg-active:var(--color-primary-100);
+  --tab-bg-disabled:var(--color-neutral-200);
+  --tab-text-disabled:var(--color-neutral-400);
+}
+
+/* —— 暗色派生（§1.8 / 设计令牌 §4.1，同色相明暗派生） —— */
+html.dark{
+  --bg-app:#1E1A17; --bg-surface:#2A2521; --bg-raised:#322B26; --bg-subtle:#2A2521;
+  --text-strong:#F3EEE9; --text-body:#F3EEE9; --text-soft:#C4B7AA; --text-muted:#9C8F82;
+  --border:#3A342D; --border-strong:#4A433B;
+  --brand:#D67C57; --brand-soft:rgba(214,124,87,0.16); --brand-contrast:#262119;
+  --accent:#57A697;
+  --color-success:#4CAE78; --color-success-surface:rgba(76,174,120,0.16);
+  --color-warning:#D99A3C; --color-warning-surface:rgba(217,154,60,0.16);
+  --color-error:#E5736B; --color-error-surface:rgba(229,115,107,0.16);
+  --color-info:#5DA7E0; --color-info-surface:rgba(93,167,224,0.16);
+  --color-focus-ring:#D67C57;
+  --topbar-surface:#2A2521; --topbar-border:1px solid #3A342D;
+  --brand-name:var(--text-strong);
+  --brand-mark-fg:#262119;
+  --user-chip:#322B26; --user-chip-fg:#F3EEE9;
+  --tabbar-surface:#2A2521; --tabbar-border:1px solid #3A342D;
+  --tab-text-default:#C4B7AA; --tab-icon-default:#9C8F82;
+  --tab-fg-active:#D67C57; --tab-bg-active:rgba(214,124,87,0.16);
+  --tab-bg-disabled:#2A2521; --tab-text-disabled:#9C8F82;
+  --panel-surface:#2A2521; --panel-border:1px solid #3A342D; --panel-sub-surface:#322B26;
+}

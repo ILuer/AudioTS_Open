@@ -1,0 +1,183 @@
+/* ============================================================
+   通知中心样式（toast 浮层 + critical 全屏遮罩）
+   —— 复用原型 tokens.css 的功能色 / 阴影令牌；
+      浮层定位取原型 #toastHost / .modal-mask / .modal 规范。
+   ============================================================ */
+
+/* —— Toast 容器：右上角堆叠 —— */
+.toast-host {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast-host .toast {
+  pointer-events: auto;
+}
+
+/* —— 单条 Toast（卡片 + 左彩条，原型 .toast 规范） —— */
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--color-success-surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-toast);
+  padding: 11px 14px;
+  font-size: 13px;
+  color: var(--text-body);
+  animation: toastIn 0.2s ease;
+  position: relative;
+}
+.toast.success {
+  border-left-color: var(--color-success);
+}
+.toast.error {
+  border-left-color: var(--color-error);
+}
+.toast.warning {
+  border-left-color: var(--color-warning);
+}
+.toast.info {
+  border-left-color: var(--color-info);
+}
+.toast .t-ico {
+  font-size: 15px;
+  line-height: 1.4;
+  flex: none;
+}
+.toast.success .t-ico {
+  color: var(--color-success);
+}
+.toast.error .t-ico {
+  color: var(--color-error);
+}
+.toast.warning .t-ico {
+  color: var(--color-warning);
+}
+.toast.info .t-ico {
+  color: var(--color-info);
+}
+.toast .t-body {
+  flex: 1;
+  min-width: 0;
+}
+.toast .t-title {
+  font-weight: 600;
+  color: var(--text-strong);
+  line-height: 1.4;
+}
+.toast .t-msg {
+  margin-top: 2px;
+  color: var(--text-soft);
+  line-height: 1.55;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+.toast .t-close {
+  margin-left: 6px;
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 6px;
+}
+.toast .t-close:hover {
+  color: var(--text-strong);
+  background: var(--bg-subtle);
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* —— critical 全屏遮罩 + 卡片（原型 .modal-mask / .modal，错误红） —— */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(38, 33, 25, 0.5);
+  z-index: 300;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-mask.show {
+  display: flex;
+}
+.modal {
+  background: var(--bg-raised);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-modal);
+  max-width: 420px;
+  width: 100%;
+  padding: 24px;
+  animation: modalIn 0.2s ease;
+}
+.modal .m-ico {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--color-error-surface);
+  color: var(--color-error);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+.modal h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  color: var(--text-strong);
+}
+.modal p {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+.modal .m-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* —— 窄屏适配 —— */
+@media (max-width: 640px) {
+  .toast-host {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    top: 12px;
+  }
+}
