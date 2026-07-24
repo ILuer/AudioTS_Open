@@ -7,13 +7,17 @@
     <meta name="description" content="Qwen3-TTS WASM 离线前端配音系统" />
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval';
+      script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com;
       worker-src 'self' blob:;
       connect-src 'self' http://localhost:* http://127.0.0.1:* https:;
       img-src 'self' data:;
       media-src 'self' blob:;
       style-src 'self' 'unsafe-inline';
     " />
+    <!-- 白名单说明：static.cloudflareinsights.com 是 Cloudflare 边缘注入的
+         Web Analytics / Bot Management beacon（错误1）。保留分析功能且消除 CSP
+         报错。若需彻底去除，可在 Cloudflare 控制台关闭 Web Analytics/Bot Management。
+         connect-src 已含 https:，beacon 上报请求不受限。 -->
     <title>Qwen3-TTS</title>
   </head>
   <body>

@@ -75,6 +75,10 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    // 消除 Vite 默认注入的内联 modulepreload polyfill <script>，
+    // 该内联脚本会被 meta CSP 的 script-src（无 'unsafe-inline'）拦截（错误2）。
+    // 现代浏览器原生支持 <link rel="modulepreload">，无需此 polyfill。
+    modulePreload: { polyfill: false },
     rollupOptions: {
       output: {
         manualChunks: {
