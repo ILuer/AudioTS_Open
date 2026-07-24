@@ -46,6 +46,35 @@ AudioTS 是一款完全在你的浏览器中运行的语音合成工具。无需
 2. **选择音色** —— 用文字描述理想声音，或上传参考音频创建专属音色。
 3. **输入文字，生成语音** —— 粘贴文本，点击生成，即可试听与下载。
 
+## 🛡️ 安全架构与已知控制台报错
+
+AudioTS 的安全采用**两层架构**：
+
+- **站内安全（由项目代码负责）**：应用逻辑、模型加载、音频处理全部在浏览器本地完成，文字与音频不出本机。通过严格的 CSP（Content-Security-Policy）约束浏览器端可执行脚本，缩小 XSS 等前端攻击面。
+- **站外安全（由 Cloudflare Pages 负责）**：站点的边缘防护——包括 Cloudflare 机器人防护（Bot Management）与访问分析（Web Analytics）——完全依赖 Cloudflare 平台，不在项目代码内实现。
+
+### 为什么控制台会出现 CSP 报错（且无需修复）
+
+为在不弱化 CSP 的前提下保留 Cloudflare 的站点级防护，我们**刻意保持严格 CSP**（`script-src 'self' 'wasm-unsafe-eval'`）。而 Cloudflare 的部分 zone 级功能会在边缘向 HTML 注入**内联脚本**：
+
+| 来源 | 注入内容 | 被 CSP 拦截的表现 | 性质 |
+|------|---------|------------------|------|
+| Bot Management → JavaScript Detections | 创建隐藏 iframe 并加载 `/cdn-cgi/challenge-platform/.../main.js`，设置 `window.__CF$cv$params` | `Executing inline script violates CSP` | 站外安全功能，非致命 |
+| Web Analytics | 内联分析 loader + 外部 `beacon.min.js` | 内联脚本 CSP 报错；`beacon.min.js` 还可能被浏览器隐私防护/广告拦截器客户端拦截（`ERR_BLOCKED_BY_CLIENT`） | 访问统计，非安全 |
+
+**这些报错是「安全设计」的预期副作用，不影响功能与安全：**
+
+1. **机器人防护依然生效**。Bot Management 运行在 Cloudflare 边缘（zone 级），对请求的评分与拦截独立于本应用的 CSP。CSP 只决定「浏览器里哪些脚本能执行」，管不到 Cloudflare 边缘的防护。实测 `open.ats.iluer.com` 响应经 `Server: cloudflare` 代理、含 `CF-RAY` 边缘标识，且对可疑客户端会注入 `challenge-platform` 挑战脚本——证明防护在主动执行。
+2. **报错仅出现在 Cloudflare 主动发起挑战时**（如流量被识别为可疑），对通过其它信号判定为正常的人类访客不会注入挑战、也无报错。
+3. **应用本身照常运行**：项目自身的脚本均为同源外链（`'self'` 放行），不受内联脚本 CSP 影响。
+
+### 如果你希望消除这些报错
+
+- **机器人防护**：必须在 Cloudflare 控制台保留（站外安全核心）。若要彻底消除其内联挑战带来的 CSP 报错，可采用 Cloudflare Pages Function（`_worker.js`）以 per-request nonce 下发严格 CSP 的兼容方案——这属于部署架构变更，本项目当前选择「保持严格 CSP + 容忍边缘注入报错」的简洁路线。
+- **Web Analytics**：该项为访问统计、非安全功能，可在 Cloudflare 控制台按需开关；开启时会带来上述分析类报错，属预期。
+
+> 简言之：**严格 CSP 是我们的选择，Cloudflare 边缘注入是平台行为；两者冲突产生的控制台报错是已知且无害的，不代表应用或防护存在缺陷。**
+
 ## 📄 开源许可
 
 本项目以 **GNU Affero General Public License v3.0（AGPL-3.0）** 许可证发布。
