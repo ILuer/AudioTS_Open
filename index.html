@@ -7,20 +7,21 @@
     <meta name="description" content="Qwen3-TTS WASM 离线前端配音系统" />
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com 'sha256-t90YM5+oOsjQMoSomLKl+OquWF3vF42r0GMVrp2VkaY=';
+      script-src 'self' 'wasm-unsafe-eval';
       worker-src 'self' blob:;
       connect-src 'self' http://localhost:* http://127.0.0.1:* https:;
       img-src 'self' data:;
       media-src 'self' blob:;
       style-src 'self' 'unsafe-inline';
     " />
-    <!-- CSP 放行 Cloudflare Web Analytics（保留分析）：
-         - https://static.cloudflareinsights.com 放行边缘注入的外部 beacon.min.js（报错2）
-         - 'sha256-t90YM5+oOsjQMoSomLKl+OquWF3vF42r0GMVrp2VkaY=' 放行其内联 bootstrap（报错1）
-         - nonce 不可行：meta CSP 为静态文件，Cloudflare Pages 无法按请求动态生成 nonce
-         - 注意：Cloudflare 若更新 loader，hash 会失效需同步更新；彻底干净方案是在
-           Cloudflare 控制台关闭 Web Analytics 注入，届时本行可去掉域名与 hash 恢复严格 CSP。
-         connect-src 已含 https:，beacon 上报请求不受限。 -->
+    <!-- CSP 严格态：Cloudflare Web Analytics 不可行，保持收紧
+         - Cloudflare Web Analytics 在边缘向 HTML 注入内联 loader，且逐请求动态生成、
+           hash 不稳定，无法用固定 sha256 白名单放行（实测已三次变 hash）。
+         - 其外链 beacon.min.js 被浏览器隐私防护/广告拦截器客户端拦截（与 CSP 无关）。
+         - 故在 Cloudflare 控制台关闭 Web Analytics 注入，本处保持严格 CSP。
+         - script-src 仅 'self' + 'wasm-unsafe-eval'（WASM 必需）。若分析注入误保留，
+           内联脚本仍会被本 CSP 拦截（报错），属预期，关分析后即消失。
+         connect-src 已含 https:，同源资源不受影响。 -->
     <title>Qwen3-TTS</title>
   </head>
   <body>
