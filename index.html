@@ -7,25 +7,27 @@
     <meta name="description" content="Qwen3-TTS WASM 离线前端配音系统" />
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval';
+      script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com;
       worker-src 'self' blob:;
       connect-src 'self' http://localhost:* http://127.0.0.1:* https:;
       img-src 'self' data:;
       media-src 'self' blob:;
       style-src 'self' 'unsafe-inline';
     " />
-    <!-- CSP 严格态：Cloudflare Web Analytics 不可行，保持收紧
-         - Cloudflare Web Analytics 在边缘向 HTML 注入内联 loader，且逐请求动态生成、
-           hash 不稳定，无法用固定 sha256 白名单放行（实测已三次变 hash）。
-         - 其外链 beacon.min.js 被浏览器隐私防护/广告拦截器客户端拦截（与 CSP 无关）。
-         - 故在 Cloudflare 控制台关闭 Web Analytics 注入，本处保持严格 CSP。
-         - script-src 仅 'self' + 'wasm-unsafe-eval'（WASM 必需）。若分析注入误保留，
-           内联脚本仍会被本 CSP 拦截（报错），属预期，关分析后即消失。
-         connect-src 已含 https:，同源资源不受影响。 -->
+    <!-- CSP 与 Cloudflare Web Analytics 兼容方案（手动安装模式）
+         - Web Analytics 设为「启用并安装 JS 片段」：Cloudflare 不在边缘注入内联 loader，
+           改由本项目在 body 末尾手动写入官方外链 <script type='module' src=...> 标签。
+         - 因是外链脚本（非内联），script-src 仅需白名单放行
+           https://static.cloudflareinsights.com，无需 'unsafe-inline'、无需 sha256 hash。
+         - 此模式同时满足：严格 CSP + 保留访问分析 + Bot Management 不变。
+         - connect-src 已含 https:，beacon 上报请求不受限。 -->
     <title>Qwen3-TTS</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- Cloudflare Web Analytics -->
+    <script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "fd1b454e6837420a8b3a6679f6e1ab42"}'></script>
+    <!-- End Cloudflare Web Analytics -->
   </body>
 </html>
