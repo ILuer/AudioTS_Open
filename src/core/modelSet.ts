@@ -1,38 +1,61 @@
 /**
  * src/core/modelSet.ts — 模型集抽象与相对路径解析
  *
- * 每个模型集拥有独立的相对目录与文件清单，支持项目根相对路径解析
+ * 每个模型集拥有独立的相对目录、文件清单与能力契约，支持项目根相对路径解析
  * （dev：`/Models/...` 静态服务；prod：FSAA 选中目录），实现可移植。
+ *
+ * 多模型可插拔改造（dev 分支）:
+ *   - ModelSetId 由字面量联合放宽为 string —— 新增模型集不再需要改类型
+ *   - ModelSet 增加 label / capability / hfUrl，模型集自描述
+ *   - 具体注册与查询统一走 @/core/modelRegistry
  */
 
 import type { ModelFileInfo } from '@/types';
+import type { ModelCapability } from '@/types/capability';
+import { QWEN3_TTS_VD_CAPABILITY } from '@/core/modelCapability';
 import {
   getVoiceDesignModelDir,
   VOICEDESIGN_MODEL_FILES,
+  HF_MODEL_URL,
 } from '@/core/constants';
 
-/** 模型集标识 */
-export type ModelSetId = 'voicedesign';
+/** 模型集标识（放宽为 string，新增模型集无需改动类型定义） */
+export type ModelSetId = string;
+
+/** 内建默认模型集 id */
+export const DEFAULT_MODEL_SET_ID = 'voicedesign';
 
 /** 模型集定义 */
 export interface ModelSet {
   /** 唯一标识 */
   id: ModelSetId;
-  /** 相对项目根的目录（dev：`Models/voicedesign/onnx`；prod：用户选中目录内对应子目录） */
+  /** 人类可读标签（UI 展示用） */
+  label: string;
+  /** 相对项目根的目录（dev：`Models`；prod：用户选中目录内对应子目录） */
   dir: string;
   /** 该集合包含的全部模型文件清单 */
   files: ModelFileInfo[];
-  /** 是否由 manifest.json 的 sub_models 驱动（voicedesign=true；base=false，静态列表） */
+  /** 是否由 manifest.json 的 sub_models 驱动 */
   manifestDriven: boolean;
+  /** 下载地址（各模型集可不同） */
+  hfUrl?: string;
+  /**
+   * 能力契约（session/张量/timing/tokenizer 契约）。
+   * 缺省时由 modelRegistry 回落到 QWEN3_TTS_VD_CAPABILITY。
+   */
+  capability?: ModelCapability;
 }
 
-/** VoiceDesign 模型集（本次改造新增，相对路径）
+/** VoiceDesign 模型集（相对路径）
  * dir 调用 getVoiceDesignModelDir() 获取动态路径（支持用户自定义 URL） */
 export const VOICEDESIGN_MODEL_SET: ModelSet = {
-  id: 'voicedesign',
+  id: DEFAULT_MODEL_SET_ID,
+  label: 'VoiceDesign 1.7B',
   dir: getVoiceDesignModelDir(),
   files: VOICEDESIGN_MODEL_FILES,
   manifestDriven: true,
+  hfUrl: HF_MODEL_URL,
+  capability: QWEN3_TTS_VD_CAPABILITY,
 };
 
 /**
@@ -59,28 +82,56 @@ export function modelNameFromFile(filename: string): string {
 }
 
 /**
- * 从 manifest.json 动态加载模型文件清单。
- * 改进依据: 状态盘点报告 P1-1 — manifest.json 动态读取
+ * 从 manifest.json 的 sub_models 段读取文件清单。
  *
- * manifest.json 的 sub_models 为对象（键=模型名，值={filename}），
- * 不包含 sizeBytes/sha256/required —— 这些字段由调用方补充或使用默认值。
+ * manifest 的 sub_models 只提供 filename，不含 sizeBytes/sha256/required。
+ * 若直接以 sizeBytes=0 返回，ModelLoader 的体积校验会全部误报 SIZE_MISMATCH
+ * —— 因此这里与基准清单按文件名合并，未知文件才以宽松默认值补充。
  *
- * @param dir - 模型集目录路径（如 'Models'）
- * @returns 解析后的模型文件信息数组
- * @throws 当 manifest.json 无法加载或解析失败时抛出
+ * @param manifest manifest.json 解析后的对象
+ * @param baseline 基准清单（通常是 constants 中的静态清单）
  */
-export async function loadModelFilesFromManifest(dir: string): Promise<ModelFileInfo[]> {
-  const url = `${dir}/manifest.json`;
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    throw new Error(`无法加载 manifest: ${url} (HTTP ${resp.status})`);
+export function mergeFilesFromManifest(
+  manifest: unknown,
+  baseline: ModelFileInfo[],
+): ModelFileInfo[] {
+  const obj = manifest as { sub_models?: Record<string, { filename?: string }> } | null;
+  const subModels = obj?.sub_models;
+  if (!subModels || typeof subModels !== 'object') return baseline;
+
+  const byName = new Map(baseline.map((f) => [f.filename, f]));
+  const merged: ModelFileInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of Object.values(subModels)) {
+    const filename = entry?.filename;
+    if (typeof filename !== 'string' || seen.has(filename)) continue;
+    seen.add(filename);
+    const known = byName.get(filename);
+    merged.push(
+      known
+        ? { ...known }
+        : { filename, sizeBytes: 0, sha256: '', required: true },
+    );
   }
-  const manifest = await resp.json();
-  const subModels: Record<string, { filename: string }> = manifest.sub_models ?? {};
-  return Object.values(subModels).map((m) => ({
-    filename: m.filename,
-    sizeBytes: 0,
-    sha256: '',
-    required: true,
-  }));
+
+  // 基准清单中 manifest 未列出但磁盘存在的文件（如非缓存 talker.onnx）需保留
+  for (const f of baseline) {
+    if (!seen.has(f.filename)) merged.push({ ...f });
+  }
+
+  return merged;
+}
+
+/**
+ * 解析 manifest.json 文本为对象（容错）。
+ * @returns 解析成功返回对象，失败返回 null
+ */
+export function parseManifestJson(json: string | undefined | null): unknown {
+  if (!json) return null;
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }

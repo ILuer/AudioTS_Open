@@ -3,27 +3,28 @@
  *
  * 对标 Python inference.py Pipeline.generate()
  * - KV-cache talker (talker_cache.onnx) O(n) AR 循环
- * - VoiceDesign config.json token IDs（配置驱动，从 encodingRegistry 动态读取）
+ * - VoiceDesign config.json token IDs（配置驱动，从 EncodingRegistry 动态读取）
  * - tok_decoder 1920 samples/frame (48000/25)
+ *
+ * 多模型可插拔改造（dev 分支）:
+ *   - session 名、ONNX 张量名、解码块帧数、采样率、最小帧数、AR 上限
+ *     全部取自 ModelCapability（装配自 manifest.json 的 `capability` 段）
+ *   - KV-cache 输入名按契约生成，不再内联拼字符串
+ *   - talker_cache 的 logits / hidden_states 按契约名解析（保留位置兜底），
+ *     present 张量 = 输出键去掉这两个语义键，而非盲取 keys[2..]
+ *   - 本类即 pipelineKind = 'qwen3-tts-vd' 的实现，注册于 pipelineFactory
  */
 import { OrtSessionManager } from '@/core/ortSessionManager';
-import {
-  OUTPUT_SAMPLE_RATE as SR,
-} from '@/core/constants';
-import { encodingRegistry } from '@/core/encodingRegistry';
+import { EncodingRegistry, getActiveRegistry } from '@/core/encodingRegistry';
+import { buildKvInputNames, sessionNameOf } from '@/core/modelCapability';
+import { getActiveCapability } from '@/core/modelRegistry';
+import type { ModelCapability, SessionRole } from '@/types/capability';
 import { Tokenizer } from './tokenizer';
 import { CodecEmbed } from './codecEmbed';
 import { applyRepetitionPenalty, sampleToken, makeRng } from './sampling';
 import { logger } from '@/core/logger';
 
-// ── Architecture-fixed constants ──
-const DEC_FRAMES = 25;      // tok_decoder fixed chunk size
-
-// Minimum frames before allowing EOS — prevents word swallowing
-// when sampling produces EOS too early in the AR loop
-const MIN_FRAMES_BEFORE_EOS = 5;  // ~0.4s minimum audio duration
-
-interface TtsInputV2 {
+export interface TtsSynthesisInput {
   text: string;
   language?: string;
   instruct?: string;
@@ -37,19 +38,52 @@ interface TtsInputV2 {
   onProgress?: (percent: number, message: string) => void;
 }
 
+/** @deprecated 使用 TtsSynthesisInput */
+export type TtsInputV2 = TtsSynthesisInput;
+
+export interface TtsPipelineV2Options {
+  /** 能力契约；缺省取「当前生效契约」 */
+  capability?: ModelCapability;
+  /** 编码配置注册表；缺省取「当前生效注册表」 */
+  registry?: EncodingRegistry;
+}
+
 export class TtsPipelineV2 {
   private sm: OrtSessionManager;
   private tokenizer: Tokenizer;
   private codecEmbed: CodecEmbed;
+  private cap: ModelCapability;
+  private reg: EncodingRegistry;
+  private _pastNames: string[] | null = null;
+  private _pastNamesKey = '';
 
-  constructor(sm: OrtSessionManager, tokenizer: Tokenizer) {
+  constructor(sm: OrtSessionManager, tokenizer: Tokenizer, options: TtsPipelineV2Options = {}) {
     this.sm = sm;
     this.tokenizer = tokenizer;
-    this.codecEmbed = new CodecEmbed(sm);
+    this.cap = options.capability ?? getActiveCapability();
+    this.reg = options.registry ?? getActiveRegistry();
+    this.codecEmbed = new CodecEmbed(sm, this.cap);
+  }
+
+  /** 当前生效契约（供 UI / 诊断展示） */
+  get capability(): ModelCapability {
+    return this.cap;
   }
 
   async destroy(): Promise<void> {
     await this.sm.releaseAll();
+  }
+
+  // ── 契约访问器 ──
+
+  /** session 名（按能力契约解析，替代字面量） */
+  private sess(role: SessionRole): string {
+    return sessionNameOf(this.cap, role);
+  }
+
+  /** 每帧 codec 码本组数：config.json 权威，未初始化时回落到契约声明值 */
+  private get nGroups(): number {
+    return this.reg.isInitialized() ? this.reg.getNumCodeGroups() : this.cap.numCodeGroups;
   }
 
   // ── Embedding helpers ──
@@ -59,13 +93,14 @@ export class TtsPipelineV2 {
   }
 
   private async embedText(textIds: Int32Array): Promise<Float32Array> {
+    const io = this.cap.io;
     const res = await this.sm.runInference<{success:boolean;data:Record<string,ArrayBuffer>}>(
-      'text_embed',
-      { text_ids: new Int32Array(textIds) },
-      { text_ids: [1, textIds.length] },
+      this.sess('textEmbed'),
+      { [io.textIds]: new Int32Array(textIds) },
+      { [io.textIds]: [1, textIds.length] },
       'embed',
     );
-    const buf = res.data!['text_embeds'] ?? res.data![Object.keys(res.data!)[0]];
+    const buf = res.data![io.textEmbeds] ?? res.data![Object.keys(res.data!)[0]];
     return new Float32Array(buf);
   }
 
@@ -75,21 +110,18 @@ export class TtsPipelineV2 {
 
   // ── KV-cache talker (Python _ar_loop_cached L407-447) ──
 
-  private _pastNames: string[] | null = null;
-
   private getPastNames(count: number): string[] {
-    if (this._pastNames) return this._pastNames;
-    const names = ['past_kv', 'past_kv_0_1'];
-    for (let i = 1; i < count / 2; i++) {
-      names.push(`past_kv_${i}_0`, `past_kv_${i}_1`);
-    }
+    const key = `${this.cap.kvInputNaming}:${count}`;
+    if (this._pastNames && this._pastNamesKey === key) return this._pastNames;
+    const names = buildKvInputNames(this.cap, count);
     this._pastNames = names;
+    this._pastNamesKey = key;
     return names;
   }
 
   private makeEmptyPast(): Float32Array[] {
     const past: Float32Array[] = [];
-    const nPastTensors = encodingRegistry.getNumPastTensors();
+    const nPastTensors = this.reg.getNumPastTensors();
     for (let i = 0; i < nPastTensors; i++) {
       past.push(new Float32Array(0));
     }
@@ -100,40 +132,45 @@ export class TtsPipelineV2 {
     inputsEmbeds: Float32Array, positionIds: Int32Array, attentionMask: Int32Array,
     past: Float32Array[], pastLengths: Int32Array,
   ): Promise<{logits:Float32Array; hidden:Float32Array; present:Float32Array[]}> {
-    const H = encodingRegistry.getTalkerHiddenSize();
-    const nPastTensors = encodingRegistry.getNumPastTensors();
-    const nKvHeads = encodingRegistry.getNumKvHeads();
-    const headDim = encodingRegistry.getHeadDim();
+    const io = this.cap.io;
+    const H = this.reg.getTalkerHiddenSize();
+    const nPastTensors = this.reg.getNumPastTensors();
+    const nKvHeads = this.reg.getNumKvHeads();
+    const headDim = this.reg.getHeadDim();
     const seqLen = inputsEmbeds.length / H;
     const totalLen = attentionMask.length;
     const pastNames = this.getPastNames(nPastTensors);
     const feeds: Record<string, unknown> = {
-      inputs_embeds: new Float32Array(inputsEmbeds),
-      position_ids: new Int32Array(positionIds),
-      attention_mask: new Int32Array(attentionMask),
+      [io.inputsEmbeds]: new Float32Array(inputsEmbeds),
+      [io.positionIds]: new Int32Array(positionIds),
+      [io.attentionMask]: new Int32Array(attentionMask),
     };
     const shapes: Record<string, number[]> = {
-      inputs_embeds: [1, seqLen, H],
-      position_ids: [3, 1, seqLen],
-      attention_mask: [1, totalLen],
+      [io.inputsEmbeds]: [1, seqLen, H],
+      [io.positionIds]: [3, 1, seqLen],
+      [io.attentionMask]: [1, totalLen],
     };
     for (let i = 0; i < nPastTensors; i++) {
       feeds[pastNames[i]] = past[i];
       shapes[pastNames[i]] = [1, nKvHeads, pastLengths[i], headDim];
     }
     const res = await this.sm.runInference<{success:boolean;data:Record<string,ArrayBuffer>}>(
-      'talker_cache', feeds, shapes, 'ar_loop_cached',
+      this.sess('talkerCache'), feeds, shapes, 'ar_loop_cached',
     );
     const keys = Object.keys(res.data!);
-    const logitsBuf = res.data!['logits_Q4'] ?? res.data![keys[0]];
-    const hiddenBuf = res.data!['hidden_states'] ?? res.data![keys[1]];
+    // 按契约名解析多输出；契约名不在输出中时回落到历史位置约定（keys[0]=logits, keys[1]=hidden）
+    const logitsKey = keys.includes(io.logits) ? io.logits : keys[0];
+    const hiddenKey = keys.includes(io.hiddenStates)
+      ? io.hiddenStates
+      : keys.find((k) => k !== logitsKey) ?? keys[1];
     const present: Float32Array[] = [];
-    for (let i = 2; i < keys.length; i++) {
-      present.push(new Float32Array(res.data![keys[i]]));
+    for (const key of keys) {
+      if (key === logitsKey || key === hiddenKey) continue;
+      present.push(new Float32Array(res.data![key]));
     }
     return {
-      logits: new Float32Array(logitsBuf),
-      hidden: new Float32Array(hiddenBuf),
+      logits: new Float32Array(res.data![logitsKey]),
+      hidden: new Float32Array(res.data![hiddenKey]),
       present,
     };
   }
@@ -147,13 +184,13 @@ export class TtsPipelineV2 {
     maxFrames: number,
     onProgress?: (percent: number, message: string) => void,
   ): Promise<Int32Array[]> {
-    const H = encodingRegistry.getTalkerHiddenSize();
-    const V = encodingRegistry.getCodecVocabSize();
-    const nPastTensors = encodingRegistry.getNumPastTensors();
-    const nGroups = encodingRegistry.getNumCodeGroups();
-    const suppressStart = encodingRegistry.getSuppressStart();
-    const codecEos = encodingRegistry.getCodecEos();
-    const cpVocab = encodingRegistry.getCodePredictorVocabSize();
+    const H = this.reg.getTalkerHiddenSize();
+    const V = this.reg.getCodecVocabSize();
+    const nPastTensors = this.reg.getNumPastTensors();
+    const nGroups = this.nGroups;
+    const suppressStart = this.reg.getSuppressStart();
+    const codecEos = this.reg.getCodecEos();
+    const cpVocab = this.reg.getCodePredictorVocabSize();
 
     let past = this.makeEmptyPast();
     const pastLen = new Int32Array(nPastTensors);
@@ -189,7 +226,7 @@ export class TtsPipelineV2 {
       }
       const penalized = applyRepetitionPenalty(first, prevFirst, repetitionPenalty);
       const code0 = sampleToken(penalized, { doSample, topK, topP, temperature, rng, protectedTokens: [codecEos] });
-      if (step >= MIN_FRAMES_BEFORE_EOS && code0 === codecEos) break;
+      if (step >= this.cap.minFramesBeforeEos && code0 === codecEos) break;
       prevFirst.push(code0);
 
       // Early stop: if model diverges (same code0 repeated >20 frames after 60+ frames generated)
@@ -237,30 +274,33 @@ export class TtsPipelineV2 {
   // ── Downstream models ──
 
   private async predictResidual(talkerHidden: Float32Array, codecIds: Int32Array): Promise<Float32Array> {
-    const H = encodingRegistry.getTalkerHiddenSize();
-    const nGroups = encodingRegistry.getNumCodeGroups();
+    const io = this.cap.io;
+    const H = this.reg.getTalkerHiddenSize();
+    const nGroups = this.nGroups;
     const res = await this.sm.runInference<{success:boolean;data:Record<string,ArrayBuffer>}>(
-      'code_predictor',
-      { talker_hidden: new Float32Array(talkerHidden), codec_ids: new Int32Array(codecIds) },
-      { talker_hidden: [1, H], codec_ids: [1, nGroups] },
+      this.sess('codePredictor'),
+      { [io.talkerHidden]: new Float32Array(talkerHidden), [io.codecIds]: new Int32Array(codecIds) },
+      { [io.talkerHidden]: [1, H], [io.codecIds]: [1, nGroups] },
       'ar_loop',
     );
-    return new Float32Array(res.data!['group_logits']);
+    return new Float32Array(res.data![io.groupLogits]);
   }
 
   private async stepEmbed(codecIds: Int32Array): Promise<Float32Array> {
-    const nGroups = encodingRegistry.getNumCodeGroups();
+    const io = this.cap.io;
+    const nGroups = this.nGroups;
     const res = await this.sm.runInference<{success:boolean;data:Record<string,ArrayBuffer>}>(
-      'residual_embed',
-      { codec_ids: new Int32Array(codecIds) },
-      { codec_ids: [1, nGroups] },
+      this.sess('residualEmbed'),
+      { [io.codecIds]: new Int32Array(codecIds) },
+      { [io.codecIds]: [1, nGroups] },
       'ar_loop',
     );
-    return new Float32Array(res.data!['step_embed']);
+    return new Float32Array(res.data![io.stepEmbed]);
   }
 
   private async decodeChunked(codes: Int32Array): Promise<Float32Array> {
-    const nGroups = encodingRegistry.getNumCodeGroups();
+    const nGroups = this.nGroups;
+    const DEC_FRAMES = this.cap.decoderFrames;
     const totalFrames = codes.length / nGroups;
     if (!Number.isInteger(totalFrames)) {
       throw new Error(`codes length ${codes.length} not multiple of ${nGroups}`);
@@ -296,19 +336,22 @@ export class TtsPipelineV2 {
   }
 
   private async decodeSingleChunk(chunk: Int32Array): Promise<Float32Array> {
-    const nGroups = encodingRegistry.getNumCodeGroups();
+    const io = this.cap.io;
+    const nGroups = this.nGroups;
+    const DEC_FRAMES = this.cap.decoderFrames;
     const res = await this.sm.runInference<{success:boolean;data:Record<string,ArrayBuffer>}>(
-      'tok_decoder',
-      { audio_codes: chunk },
-      { audio_codes: [1, DEC_FRAMES, nGroups] },
+      this.sess('tokDecoder'),
+      { [io.audioCodes]: chunk },
+      { [io.audioCodes]: [1, DEC_FRAMES, nGroups] },
       'synthesis',
     );
-    return new Float32Array(res.data!['waveform']);
+    return new Float32Array(res.data![io.waveform]);
   }
 
   // ── PCM → Int16 WAV ──
 
   pcmToWav(pcm: Float32Array): Blob {
+    const SR = this.cap.sampleRate;
     const numSamples = pcm.length;
     const dataSize = numSamples * 2;
     const buffer = new ArrayBuffer(44 + dataSize);
@@ -347,7 +390,6 @@ export class TtsPipelineV2 {
     out = out.replace(/([a-zA-Z])(\d)/g, '$1 $2');
     out = out.replace(/(\d)([a-zA-Z])/g, '$1 $2');
     // Split digit-hyphen-letter patterns like "3-T" in "Qwen3-TTS"
-    // "Qwen3TTS" → "Qwen 3 TTS" / "Qwen3-TTS" → "Qwen 3 - TTS"
     // NOTE: 缩写词（如 TTS）不再逐字母拆分，否则 TTS 模型会按字母拼读，
     // 损害合成自然度。保留 "Qwen3" → "Qwen 3" 的字母↔数字边界拆分即可。
     out = out.replace(/(\d)(-)([a-zA-Z])/g, '$1 $2 $3');
@@ -360,10 +402,10 @@ export class TtsPipelineV2 {
   // Python generate() prefill + AR + decode
   // ═══════════════════════════════════════════════
 
-  async synthesize(input: TtsInputV2): Promise<{pcm:Float32Array; wav:Blob; durationSec:number}> {
-    const synthStart = performance.now();
+  async synthesize(input: TtsSynthesisInput): Promise<{pcm:Float32Array; wav:Blob; durationSec:number}> {
+    const SR = this.cap.sampleRate;
     const seed = input.seed ?? 0;
-    const sampling = encodingRegistry.getSamplingDefaults();
+    const sampling = this.reg.getSamplingDefaults();
     const temperature = input.temperature ?? sampling.temperature;
     const topK = input.topK ?? sampling.topK;
     const topP = input.topP ?? sampling.topP;
@@ -372,47 +414,46 @@ export class TtsPipelineV2 {
     const rng = makeRng(seed);
 
     // Code predictor (residual token) sampling — independent subtalker_* params
-    const subDoSample = encodingRegistry.getSubtalkerDoSample();
-    const subTemperature = encodingRegistry.getSubtalkerTemperature();
-    const subTopK = encodingRegistry.getSubtalkerTopK();
-    const subTopP = encodingRegistry.getSubtalkerTopP();
+    const subDoSample = this.reg.getSubtalkerDoSample();
+    const subTemperature = this.reg.getSubtalkerTemperature();
+    const subTopK = this.reg.getSubtalkerTopK();
+    const subTopP = this.reg.getSubtalkerTopP();
 
-    const H = encodingRegistry.getTalkerHiddenSize();
-    const nGroups = encodingRegistry.getNumCodeGroups();
+    const H = this.reg.getTalkerHiddenSize();
+    const nGroups = this.nGroups;
 
     // Text preprocessing: normalize digits and mixed alphanumeric content
     const processedText = this.preprocessText(input.text);
 
     // Explicit role tokenization: <|im_start|>assistant\n
     // Replaces the former inputIds.slice(0, 3) which hardcoded a 3-token assumption.
-    // The ROLE_LEN is validated to be 3 for Qwen2 BPE, but the code now adapts
-    // if the tokenizer produces a different count (e.g. if template format changes).
+    // ROLE_LEN 对 Qwen2 BPE 实测为 3，此处按 tokenizer 实际产出自适应。
     const roleText = '<|im_start|>assistant\n';
     const roleIds = this.tokenize(roleText);
-    const ROLE_LEN = roleIds.length;  // Verified: 3 for Qwen2 with corrected byteEncode
+    const ROLE_LEN = roleIds.length;
 
     // Instruct as user message (official format): text_proj only, BEFORE role
     // <|im_start|>user\n{instruct}<|im_end|>\n
     let instructBlock: Float32Array | null = null;
     let instructLen = 0;
-    if (input.instruct) {
+    if (input.instruct && this.cap.supportsInstruct) {
       const instructText = `<|im_start|>user\n${input.instruct}<|im_end|>\n`;
       const instructIds = this.tokenize(instructText);
       instructLen = instructIds.length;
       instructBlock = await this.embedText(instructIds);
     }
 
-    const ttsBos = encodingRegistry.getTtsBos();
-    const ttsEos = encodingRegistry.getTtsEos();
-    const ttsPad = encodingRegistry.getTtsPad();
+    const ttsBos = this.reg.getTtsBos();
+    const ttsEos = this.reg.getTtsEos();
+    const ttsPad = this.reg.getTtsPad();
     const sp = await this.embedText(new Int32Array([ttsBos, ttsEos, ttsPad]));
     const bosE = sp.slice(0, H), eosE = sp.slice(H, 2 * H), padE = sp.slice(2 * H, 3 * H);
 
-    const codecNothink = encodingRegistry.getCodecNothink();
-    const codecThinkBos = encodingRegistry.getCodecThinkBos();
-    const codecThinkEos = encodingRegistry.getCodecThinkEos();
-    const codecPad = encodingRegistry.getCodecPad();
-    const codecBos = encodingRegistry.getCodecBos();
+    const codecNothink = this.reg.getCodecNothink();
+    const codecThinkBos = this.reg.getCodecThinkBos();
+    const codecThinkEos = this.reg.getCodecThinkEos();
+    const codecPad = this.reg.getCodecPad();
+    const codecBos = this.reg.getCodecBos();
     const codec0 = await this.embedCodec(new Int32Array([codecNothink, codecThinkBos, codecThinkEos]));
     const codec1 = await this.embedCodec(new Int32Array([codecPad, codecBos]));
     const P = codec0.length / H, Q = codec1.length / H;
@@ -479,9 +520,9 @@ export class TtsPipelineV2 {
     // 6. Trigger (tts_pad + codec_bos)
     talkerIn.set(block2, offset);
 
-    // AR max frames from model config (generation_config.json max_new_tokens).
-    // Cap at 500 for short-sentence use cases (8192 is for streaming/very long text).
-    const maxFrames = Math.min(encodingRegistry.getMaxNewTokens(), 500);
+    // AR max frames: config.json max_new_tokens 与契约上限取小。
+    // 契约默认 500（短句场景）；8192 是流式/超长文本用的。
+    const maxFrames = Math.min(this.reg.getMaxNewTokens(), this.cap.maxFrames);
 
     const codes = await this.arLoopCached(talkerIn, padE, seed, rng,
       doSample, topK, topP, temperature, repetitionPenalty,
@@ -491,7 +532,8 @@ export class TtsPipelineV2 {
     if (codes.length === 0) throw new Error('AR loop produced zero frames');
     // EOS arrival diagnostic
     if (codes.length >= maxFrames) {
-      logger.warn(`[synth] generated ${codes.length} frames (hard limit ${maxFrames}) — text may be too long or EOS not triggered. Audio duration: ~${(codes.length * 80 / 1000).toFixed(1)}s`);
+      const msPerFrame = 1000 / this.cap.frameRate;
+      logger.warn(`[synth] generated ${codes.length} frames (hard limit ${maxFrames}) — text may be too long or EOS not triggered. Audio duration: ~${(codes.length * msPerFrame / 1000).toFixed(1)}s`);
     }
     const flatCodes = new Int32Array(codes.length * nGroups);
     for (let f = 0; f < codes.length; f++) flatCodes.set(codes[f], f * nGroups);
@@ -541,8 +583,7 @@ export class TtsPipelineV2 {
 
       // Only compensate if decay is significant (>30% drop)
       if (lateRms > 0 && earlyRms > 0 && lateRms < earlyRms * 0.7) {
-        const decay = lateRms / earlyRms;
-        const maxGain = Math.min(earlyRms / lateRms, 12.0); // cap at 12x (raised from 8x — analysis shows 0.70-0.86 decay ratios)
+        const maxGain = Math.min(earlyRms / lateRms, 12.0); // cap at 12x
         for (let i = 0; i < pcm.length; i++) {
           const t = i / pcm.length; // 0→1 over duration
           const rampGain = 1.0 + (maxGain - 1.0) * t; // linear ramp

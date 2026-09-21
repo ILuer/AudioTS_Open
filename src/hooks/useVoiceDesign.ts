@@ -10,9 +10,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { OrtSessionManager } from '@/core/ortSessionManager';
 import { Tokenizer } from '@/pipeline/tokenizer';
-import { TtsPipelineV2 } from '@/pipeline/ttsPipelineV2';
+import { createPipelineForActiveCapability, type TtsPipeline } from '@/pipeline/pipelineFactory';
+import { getActiveTokenizerFiles } from '@/core/modelRegistry';
 import { eventBus, AppEvents } from '@/core/eventBus';
-import { BPE_VOCAB_PATH, BPE_MERGES_PATH, BPE_CONFIG_PATH } from '@/core/constants';
 import { AppError } from '@/types';
 import type { SynthesisResult, SynthesisProgress, VoiceDesignParams } from '@/types';
 import { logger } from '@/core/logger';
@@ -46,12 +46,12 @@ export function useVoiceDesign(
   const [result, setResult] = useState<SynthesisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const pipelineRef = useRef<TtsPipelineV2 | null>(null);
+  const pipelineRef = useRef<TtsPipeline | null>(null);
   const tokenizerRef = useRef<Tokenizer>(new Tokenizer());
   const lastParamsRef = useRef<VoiceDesignParams | null>(null);
 
   /** 初始化推理管线：BPE 加载 + pipeline 创建。模型按需惰性加载（runInference 自动 loadModel）。 */
-  const ensurePipeline = useCallback(async (): Promise<TtsPipelineV2> => {
+  const ensurePipeline = useCallback(async (): Promise<TtsPipeline> => {
     if (!sessionManager) throw new AppError('INFERENCE_FAILED', 'SessionManager 未初始化');
     if (!sessionManager || !buffersReady) throw new AppError('INFERENCE_FAILED', '模型尚未全部加载完成');
 
@@ -65,12 +65,16 @@ export function useVoiceDesign(
       if (vocabData && mergesData) {
         tokenizer.loadFromData(vocabData, mergesData, configData);
       } else {
-        // Fallback: dev 模式下通过 URL 加载
-        tokenizer.load(BPE_VOCAB_PATH, BPE_MERGES_PATH, BPE_CONFIG_PATH);
+        // Fallback: dev 模式下通过 URL 加载（路径取自当前生效契约，非硬编码）
+        const paths = getActiveTokenizerFiles();
+        tokenizer.load(paths.vocab, paths.merges, paths.config);
       }
     }
 
-    if (!pipelineRef.current) pipelineRef.current = new TtsPipelineV2(sessionManager, tokenizer);
+    // 管线实现由 capability.pipelineKind 决定（manifest 驱动，可插拔）
+    if (!pipelineRef.current) {
+      pipelineRef.current = createPipelineForActiveCapability(sessionManager, tokenizer);
+    }
     return pipelineRef.current;
   }, [sessionManager, buffersReady]);
 

@@ -18,8 +18,8 @@ import React, { type FC, useState, useEffect, useRef, useCallback } from 'react'
 import type { OrtSessionManager } from '@/core/ortSessionManager';
 import { useProfiles } from '@/hooks/useProfiles';
 import { Tokenizer } from '@/pipeline/tokenizer';
-import { TtsPipelineV2 } from '@/pipeline/ttsPipelineV2';
-import { BPE_VOCAB_PATH, BPE_MERGES_PATH, BPE_CONFIG_PATH } from '@/core/constants';
+import { createPipelineForActiveCapability, type TtsPipeline } from '@/pipeline/pipelineFactory';
+import { getActiveTokenizerFiles } from '@/core/modelRegistry';
 import type { ScriptRow, VoiceProfile, VoiceDesignParams } from '@/types';
 import { logger } from '@/core/logger';
 import { fileNameOf, downloadBlob, buildZip } from '@/lib/namingRule';
@@ -248,7 +248,7 @@ const DubbingTab: FC<DubbingTabProps> = ({ sessionManager, buffersReady }) => {
   const profilesRef = useRef<VoiceProfile[]>(profiles);
   const cancelledRef = useRef(false);
   const pausedRef = useRef(false);
-  const pipelineRef = useRef<TtsPipelineV2 | null>(null);
+  const pipelineRef = useRef<TtsPipeline | null>(null);
   const tokenizerRef = useRef<Tokenizer>(new Tokenizer());
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const compareAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -265,8 +265,8 @@ const DubbingTab: FC<DubbingTabProps> = ({ sessionManager, buffersReady }) => {
     profilesRef.current = profiles;
   }, [profiles]);
 
-  // ── 真实推理管线（复用 TtsPipelineV2，与调音台同一套） ──
-  const ensurePipeline = useCallback(async (): Promise<TtsPipelineV2> => {
+  // ── 真实推理管线（复用当前生效契约对应的管线实现，与调音台同一套） ──
+  const ensurePipeline = useCallback(async (): Promise<TtsPipeline> => {
     if (!sessionManager) throw new Error('SessionManager 未初始化');
     if (!buffersReady) throw new Error('模型尚未全部加载完成');
     const tokenizer = tokenizerRef.current;
@@ -277,10 +277,14 @@ const DubbingTab: FC<DubbingTabProps> = ({ sessionManager, buffersReady }) => {
       if (vocabData && mergesData) {
         tokenizer.loadFromData(vocabData, mergesData, configData);
       } else {
-        tokenizer.load(BPE_VOCAB_PATH, BPE_MERGES_PATH, BPE_CONFIG_PATH);
+        // Fallback: 路径取自当前生效契约，非硬编码
+        const paths = getActiveTokenizerFiles();
+        tokenizer.load(paths.vocab, paths.merges, paths.config);
       }
     }
-    if (!pipelineRef.current) pipelineRef.current = new TtsPipelineV2(sessionManager, tokenizer);
+    if (!pipelineRef.current) {
+      pipelineRef.current = createPipelineForActiveCapability(sessionManager, tokenizer);
+    }
     return pipelineRef.current;
   }, [sessionManager, buffersReady]);
 

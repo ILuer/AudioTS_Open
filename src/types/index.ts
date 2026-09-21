@@ -59,8 +59,23 @@ export {
 export type { ModelSet, ModelSetId } from '../core/modelSet';
 
 export {
+  DEFAULT_MODEL_SET_ID,
   VOICEDESIGN_MODEL_SET,
   getModelPath as getModelSetPath,
   getManifestPath as getModelSetManifestPath,
+  mergeFilesFromManifest,
   modelNameFromFile,
+  parseManifestJson,
 } from '../core/modelSet';
+
+// ── 模型能力描述符（capability.ts）—— 多模型可插拔契约 ──
+export type {
+  CapabilityOverride,
+  ModelCapability,
+  PipelineKind,
+  SessionContract,
+  SessionRole,
+  TensorContract,
+  TokenizerFiles,
+} from './capability';
+export { SESSION_ROLES } from './capability';

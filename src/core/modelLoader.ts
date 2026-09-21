@@ -48,8 +48,17 @@ import {
 } from '@/core/constants';
 import { Sha256Calculator } from '@/core/sha256';
 import { eventBus, AppEvents } from '@/core/eventBus';
-import { getModelPath, getManifestPath } from '@/core/modelSet';
+import {
+  VOICEDESIGN_MODEL_SET,
+  getManifestPath,
+  getModelPath,
+  mergeFilesFromManifest,
+  parseManifestJson,
+} from '@/core/modelSet';
 import type { ModelSet } from '@/core/modelSet';
+import { modelFileOf, resolveCapability } from '@/core/modelCapability';
+import { capabilityOf, getDefaultModelSet } from '@/core/modelRegistry';
+import type { ModelCapability } from '@/types/capability';
 import {
   ModelStatus,
   AppError,
@@ -97,18 +106,18 @@ export function formatFileSize(bytes: number): string {
 // ── 下载指引共享逻辑 ──
 
 /** 构建下载指引数据（避免重复） */
-function buildDownloadGuideData(set: ModelSet = { id: 'voicedesign', dir: getVoiceDesignModelDir(), files: VOICEDESIGN_MODEL_FILES, manifestDriven: false }): DownloadGuideData {
+function buildDownloadGuideData(set: ModelSet = VOICEDESIGN_MODEL_SET): DownloadGuideData {
   const totalBytes = set.files.reduce((sum, m) => sum + m.sizeBytes, 0);
   const totalGB = (totalBytes / (1024 * 1024 * 1024)).toFixed(2);
 
   return {
-    huggingFaceUrl: HF_MODEL_URL,
+    huggingFaceUrl: set.hfUrl ?? HF_MODEL_URL,
     targetDir: set.dir,
     totalSize: `${totalGB} GB`,
     fileCount: set.files.length,
     models: set.files,
     installSteps: [
-      `1. 访问 ${HF_MODEL_URL}`,
+      `1. 访问 ${set.hfUrl ?? HF_MODEL_URL}`,
       `2. 下载全部 ${set.files.length} 个 .onnx 文件 + manifest.json`,
       `3. 将文件放入项目目录: ${set.dir}/`,
       '4. 刷新页面或点击「重新检测」',
@@ -141,12 +150,16 @@ export class ModelLoader {
   private abortController: AbortController | null = null;
   /** 已获取的原始模型 buffer（供 sessionManager 加载用）；按文件名索引 */
   private buffers: Map<string, ArrayBuffer> = new Map();
+  /**
+   * 从 manifest.json 装配出的能力契约。
+   * null 表示尚未读取或 manifest 无 capability 段 —— 此时由 capabilityOf(modelSet) 回落。
+   */
+  private capability: ModelCapability | null = null;
 
   constructor(config?: Partial<ModelLoaderConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    // 目标模型集：默认 VoiceDesign；可通过 config 覆盖
-    const defaultDir = getVoiceDesignModelDir();
-    this.modelSet = config?.modelSet ?? { id: 'voicedesign', dir: defaultDir, files: VOICEDESIGN_MODEL_FILES, manifestDriven: false };
+    // 目标模型集：默认取注册表中的默认模型集（VoiceDesign）；可通过 config 覆盖
+    this.modelSet = config?.modelSet ?? getDefaultModelSet();
     this.states = this.modelSet.files.map((file) => ({
       file,
       status: ModelStatus.PENDING,
@@ -155,6 +168,59 @@ export class ModelLoader {
       loadStartMs: 0,
       loadEndMs: 0,
     }));
+  }
+
+  /** 当前生效的能力契约（manifest 优先，未读取则回落模型集内建契约） */
+  getCapability(): ModelCapability {
+    return this.capability ?? capabilityOf(this.modelSet);
+  }
+
+  /** 当前加载的模型集 */
+  getModelSet(): ModelSet {
+    return this.modelSet;
+  }
+
+  /**
+   * 读取 manifest.json 并装配能力契约 + 合并文件清单。
+   *
+   * 必须在开始逐文件加载前调用（会重建 states）。
+   * manifest 缺失、解析失败或无 capability 段时静默回落，不影响加载流程。
+   */
+  private async syncFromManifest(): Promise<void> {
+    const text = await this.readManifestText();
+    if (!text) return;
+    const manifest = parseManifestJson(text);
+    if (!manifest) {
+      logger.warn('[ModelLoader] manifest.json 解析失败，使用内建契约与静态文件清单');
+      return;
+    }
+    this.capability = resolveCapability(text, capabilityOf(this.modelSet));
+
+    // 合并文件清单：manifest 的 sub_models 只给文件名，sizeBytes/sha256 由静态基准补全
+    // （否则体积校验会因 sizeBytes=0 全部误报 SIZE_MISMATCH）
+    const merged = mergeFilesFromManifest(manifest, this.modelSet.files);
+    if (merged.length > 0) {
+      this.modelSet = { ...this.modelSet, files: merged };
+    }
+    logger.interactive(
+      `[ModelLoader] manifest 装配完成: pipelineKind=${this.capability.pipelineKind} files=${this.modelSet.files.length}`,
+    );
+  }
+
+  /** 读取 manifest.json 文本（FSAA 目录优先，回落 dev 静态服务） */
+  private async readManifestText(): Promise<string | null> {
+    try {
+      if (this.dirHandle) {
+        const handle = await this.dirHandle.getFileHandle('manifest.json');
+        const file = await handle.getFile();
+        return await file.text();
+      }
+      const resp = await fetch(getManifestPath(this.modelSet));
+      if (!resp.ok) return null;
+      return await resp.text();
+    } catch {
+      return null;
+    }
   }
 
   /** 取回本轮已加载的模型 buffer（供 OrtSessionManager.loadModel 使用） */
@@ -179,12 +245,14 @@ export class ModelLoader {
 
   /** 从已设置的 dirHandle 校验并加载所有模型文件（不弹出选择器） */
   async loadFromExistingHandle(): Promise<ModelLoadResult> {
-    this.resetStates();
-    this.abortController = new AbortController();
     if (!this.dirHandle) {
+      this.resetStates();
       return { success: false, dirHandle: null, states: this.states, needsUserDownload: true,
         errorMessage: '未设置模型目录句柄，请重新选择文件夹。' };
     }
+    await this.syncFromManifest();
+    this.resetStates();
+    this.abortController = new AbortController();
     await this.verifyAllFromDirHandle();
     const allVerified = this.areAllRequiredReady();
     eventBus.emit(AppEvents.MODEL_ALL_COMPLETE, allVerified);
@@ -198,10 +266,10 @@ export class ModelLoader {
     };
   }
 
-  /** 检查 talker + talker_cache 是否都已 VERIFIED */
+  /** 检查 talker + talker_cache 是否都已 VERIFIED（文件名取自能力契约） */
   isTalkerPairReady(): boolean {
-    const talkerState = this.states.find((s) => s.file.filename === 'talker.onnx');
-    const talkerCacheState = this.states.find((s) => s.file.filename === 'talker_cache.onnx');
+    const cap = this.getCapability();
+    const talkerState = this.states.find((s) => s.file.filename === modelFileOf(cap, 'talker'));
     // talker_cache is optional (required: false), only check talker
     return talkerState?.status === ModelStatus.VERIFIED;
   }
@@ -219,6 +287,8 @@ export class ModelLoader {
    * Dev 模式：通过 fetch 静态文件服务读取固定目录
    */
   async loadDevModels(): Promise<ModelLoadResult> {
+    // manifest 优先装配（能力契约 + 文件清单合并），失败静默回落
+    await this.syncFromManifest();
     this.resetStates();
     this.buffers.clear();
     this.abortController = new AbortController();
@@ -345,7 +415,7 @@ export class ModelLoader {
           dirHandle: null,
           states: this.states,
           needsUserDownload: true,
-          errorMessage: '用户取消了目录选择，或未检测到模型文件。请从 HuggingFace 下载并放置到 Models/voicedesign/onnx/ 目录。',
+          errorMessage: '用户取消了目录选择，或未检测到模型文件。请从 HuggingFace 下载并放置到 Models/ 目录。',
         };
       }
     } else {
@@ -357,6 +427,10 @@ export class ModelLoader {
         errorMessage: '请使用 Chrome 91+ 浏览器，或手动通过 <input webkitdirectory> 选择模型目录。',
       };
     }
+
+    // 拿到目录后先读 manifest（能力契约 + 文件清单），再校验
+    await this.syncFromManifest();
+    this.resetStates();
 
     // 校验文件
     await this.verifyAllFromDirHandle();

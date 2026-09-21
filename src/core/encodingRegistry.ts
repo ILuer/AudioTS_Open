@@ -1,9 +1,17 @@
 /**
- * src/core/encodingRegistry.ts — 编码配置全局注册表（单例）
+ * src/core/encodingRegistry.ts — 编码配置注册表
  *
  * 在 App.tsx 加载模型目录后通过 loadConfigFromJSON 初始化。
- * 所有模块通过 encodingRegistry.getXxx() 获取运行时配置，
- * 替代原有的硬编码常量。
+ * 所有模块通过 registry.getXxx() 获取运行时配置，替代原有的硬编码常量。
+ *
+ * 多模型可插拔改造（dev 分支）:
+ *   - 由「全局单例」升级为「可多实例」：createEncodingRegistry() 工厂
+ *   - configure() 幂等替换配置，支持切换 / 重新选择模型目录
+ *     （原 initialize() 二次调用会抛 'already initialized'，切换模型必然踩到）
+ *   - getActiveRegistry() / setActiveRegistry() 提供「当前生效配置」的装配点，
+ *     默认指向全局单例，既有调用点零改动
+ *   - 架构固定值 getDecoderFrames/getSampleRate 已迁出至 ModelCapability
+ *     （decoderFrames / sampleRate），此处不再重复定义
  */
 
 import {
@@ -13,14 +21,25 @@ import {
   type VdLanguageOption,
 } from '@/types/encoding';
 
-class EncodingRegistry {
+export class EncodingRegistry {
   private config: ModelConfig | null = null;
 
-  /** 初始化注册表。重复调用将抛出 ConfigError。 */
+  /**
+   * 初始化注册表（仅允许一次）。
+   * 重复调用将抛出 ConfigError —— 需要替换配置请用 configure()。
+   */
   initialize(config: ModelConfig): void {
     if (this.config) {
       throw new ConfigError('EncodingRegistry', '', 'Configuration already initialized');
     }
+    this.config = config;
+  }
+
+  /**
+   * 设置 / 替换配置（幂等）。
+   * 多模型切换、用户重新选择模型目录时使用。
+   */
+  configure(config: ModelConfig): void {
     this.config = config;
   }
 
@@ -133,19 +152,31 @@ class EncodingRegistry {
   getSuppressStart(): number {
     return this.cfg.codec.codePredictorVocabSize;
   }
-
-  // ── 架构固定值（与模型无关） ──
-
-  /** tok_decoder 固定解码块帧数 */
-  getDecoderFrames(): number {
-    return 25;
-  }
-
-  /** 模型原生采样率 */
-  getSampleRate(): number {
-    return 24000;
-  }
 }
 
-/** 全局单例 */
+/** 创建独立的注册表实例（多模型集并行时每个模型集一份） */
+export function createEncodingRegistry(config?: ModelConfig): EncodingRegistry {
+  const reg = new EncodingRegistry();
+  if (config) reg.configure(config);
+  return reg;
+}
+
+/** 全局默认单例（向后兼容既有调用点） */
 export const encodingRegistry = new EncodingRegistry();
+
+let activeRegistry: EncodingRegistry = encodingRegistry;
+
+/** 取当前生效的编码配置注册表 */
+export function getActiveRegistry(): EncodingRegistry {
+  return activeRegistry;
+}
+
+/** 设置当前生效的编码配置注册表（切换模型集时调用） */
+export function setActiveRegistry(reg: EncodingRegistry): void {
+  activeRegistry = reg;
+}
+
+/** 复位为全局默认单例（测试用） */
+export function resetActiveRegistry(): void {
+  activeRegistry = encodingRegistry;
+}

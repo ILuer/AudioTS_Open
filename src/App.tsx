@@ -29,7 +29,12 @@ import type { EPStatus } from '@/types';
 import { ConfigError } from '@/types/encoding';
 import { getVoiceDesignModelDir } from '@/core/constants';
 import { loadConfigFromJSON } from '@/core/configLoader';
-import { encodingRegistry } from '@/core/encodingRegistry';
+import { encodingRegistry, setActiveRegistry } from '@/core/encodingRegistry';
+import {
+  activateCapabilityFromManifest,
+  getActiveCapability,
+  getActiveModelSetId,
+} from '@/core/modelRegistry';
 import { logger } from '@/core/logger';
 import NotificationCenter from '@/components/NotificationCenter';
 import { DiagnosticRunner } from '@/core/diagnostics';
@@ -282,13 +287,27 @@ const App: FC = () => {
             // 解析并初始化配置驱动编码
             try {
               const config = loadConfigFromJSON(textMap);
-              encodingRegistry.initialize(config);
+              // configure() 幂等替换：支持换模型集 / 重新选择目录
+              // （原 initialize() 二次调用会抛 'already initialized'，切换模型必踩）
+              encodingRegistry.configure(config);
+              setActiveRegistry(encodingRegistry);
             } catch (err) {
               const msg = err instanceof ConfigError ? err.message : String(err);
               logger.error('配置加载失败:', msg);
               setModelDirError(msg);
               return;
             }
+            // 装配模型能力契约：manifest.json 的 `capability` 段驱动 session/张量/timing 契约
+            // 无 capability 段（如官方 HF manifest）时自动回落到内建默认契约
+            const cap = activateCapabilityFromManifest(textMap.get('manifest.json') ?? null);
+            logger.interactive(
+              `[capability] 生效契约: pipelineKind=${cap.pipelineKind} modelSet=${getActiveModelSetId()} ` +
+                `sr=${cap.sampleRate} frameRate=${cap.frameRate} decFrames=${cap.decoderFrames} ` +
+                `instruct=${cap.supportsInstruct}`,
+            );
+            void getActiveCapability;
+            // 调试钩子：控制台可查看当前生效契约（与 __sm / __showModelDir 一致）
+            (window as any).__capability = cap;
             // 存储 BPE 文本供 Tokenizer 后续加载（保持兼容）
             if (textMap.has('vocab.json')) (window as any).__bpe_vocab_json = textMap.get('vocab.json');
             if (textMap.has('merges.txt')) (window as any).__bpe_merges_txt = textMap.get('merges.txt');
