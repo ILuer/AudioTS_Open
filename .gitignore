@@ -1,23 +1,39 @@
+# ============================================================
+# AudioTS — 仓库纯净策略
+# 允许提交（白名单）：src/** 源码 + 构建/部署必需配置 + LICENSE + README.md
+#   · 构建/部署必需：package.json / package-lock.json / tsconfig*.json /
+#     vite.config.ts / index.html / version.json / public/_headers
+# 其余一切（文档、设计产物、模型、缓存、日志、本地配置、依赖残留）
+# 一律不提交，无论分支。
+# ============================================================
+
 # Dependencies
 node_modules/
 
-# Build output
+# Build output / auto-generated
 dist/
 build/
 *.tsbuildinfo
+vite.config.d.ts
 
-# Environment (contains sensitive or local-only settings)
+# Environment (local dev switch only, never committed)
 .env
+.env.*
+!.env.example
 
-# IDE
+# IDE / Editor
 .vscode/
 .idea/
 *.swp
 *.swo
+*.bak
+*.orig
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # === 模型文件 — 不随代码分发 ===
 # 用户需自行从 HuggingFace 下载 VoiceDesign 模型集
@@ -27,6 +43,8 @@ Models/
 # Python cache
 __pycache__/
 *.pyc
+
+# Agent workspace (project data, not source)
 .workbuddy/
 
 # Audio / numpy artifacts (local only, not in repo)
@@ -37,10 +55,7 @@ __pycache__/
 server.cjs
 server.mjs
 
-# Auto-generated type declarations
-vite.config.d.ts
-
-# Project documentation assets (local only, not in GitHub repo)
+# Project documentation / design deliverables (local only)
 docs/
 deliverables/
 
@@ -48,9 +63,23 @@ deliverables/
 overview.md
 离线前端配音系统开发实施计划.md
 
-# Test files — local only, not needed for CPages build
+# Test runner config — local only, not needed for CPages build
+# 注意：src/**/__tests__/ 属源码（回归测试），仍纳入跟踪
 vitest.config.ts
 src/__tests__/
 
-# Temp / probe files
+# Logs / caches
+*.log
+logs/
+coverage/
+.cache/
+.vite/
+.eslintcache
+
+# Archives — 交付打包产物仅存本地
+*.zip
+*.tar.gz
+
+# Scratch / temp / probe files
 .tmp_probe/
+_chk*
